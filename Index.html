@@ -1,0 +1,283 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paint Shop Product Manager</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-lg p-6 sm:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-gray-800">Paint Shop Inventory</h1>
+            <p id="user-id" class="text-xs text-gray-500 mt-2"></p>
+        </header>
+
+        <!-- Product Form -->
+        <div class="mb-8 p-6 bg-gray-50 rounded-lg">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Add New Product</h2>
+            <form id="product-form" class="space-y-4">
+                <div>
+                    <label for="productName" class="block text-sm font-medium text-gray-600">Product Name</label>
+                    <input type="text" id="productName" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 p-2">
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label for="costPrice" class="block text-sm font-medium text-gray-600">Cost Price (₹)</label>
+                        <input type="number" step="0.01" id="costPrice" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 p-2">
+                    </div>
+                    <div>
+                        <label for="sellingPrice" class="block text-sm font-medium text-gray-600">Selling Price (₹)</label>
+                        <input type="number" step="0.01" id="sellingPrice" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 p-2">
+                    </div>
+                </div>
+                <button type="submit" id="formButton" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md transition duration-300 ease-in-out">
+                    Add Product
+                </button>
+            </form>
+        </div>
+
+        <!-- Product List -->
+        <div class="p-6 bg-gray-50 rounded-lg">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Current Inventory</h2>
+            <div class="mb-4">
+                <label for="searchInput" class="block text-sm font-medium text-gray-600">Search Products</label>
+                <input type="text" id="searchInput" placeholder="Search by name..." class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 p-2">
+            </div>
+            <div class="flex flex-col sm:flex-row items-center justify-between mb-4 space-y-2 sm:space-y-0">
+                <p class="text-sm font-medium text-gray-600">Sort by:</p>
+                <div class="flex space-x-2">
+                    <button id="sort-name" class="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded-md text-sm font-medium transition duration-300 ease-in-out">Name</button>
+                    <button id="sort-cost" class="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded-md text-sm font-medium transition duration-300 ease-in-out">Cost Price</button>
+                    <button id="sort-selling" class="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded-md text-sm font-medium transition duration-300 ease-in-out">Selling Price</button>
+                </div>
+            </div>
+            <div id="product-list" class="space-y-4">
+                <p class="text-center text-gray-500">Loading products...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, setLogLevel, doc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Set log level for debugging Firebase
+        setLogLevel('debug');
+
+        // Global variables for Firebase configuration
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId;
+        let productsData = [];
+        let currentSortKey = 'name';
+        let editingId = null;
+
+        // UI elements
+        const productForm = document.getElementById('product-form');
+        const productList = document.getElementById('product-list');
+        const sortByNameBtn = document.getElementById('sort-name');
+        const sortByCostBtn = document.getElementById('sort-cost');
+        const sortBySellingBtn = document.getElementById('sort-selling');
+        const userIdDisplay = document.getElementById('user-id');
+        const searchInput = document.getElementById('searchInput');
+        const productNameInput = document.getElementById('productName');
+        const costPriceInput = document.getElementById('costPrice');
+        const sellingPriceInput = document.getElementById('sellingPrice');
+        const formButton = document.getElementById('formButton');
+
+        // Initialize Firebase and authenticate user
+        async function initializeAndAuth() {
+            try {
+                // Initialize Firebase app
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Authenticate user with custom token or anonymously
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                userId = auth.currentUser?.uid || crypto.randomUUID();
+                userIdDisplay.textContent = `User ID: ${userId}`;
+
+                // Set up real-time listener for products
+                setupProductListener();
+            } catch (error) {
+                console.error("Error initializing Firebase or authenticating:", error);
+                productList.innerHTML = `<p class="text-center text-red-500">Failed to load. Check console for details.</p>`;
+            }
+        }
+
+        // Setup real-time listener for the products collection
+        function setupProductListener() {
+            const productCollectionRef = collection(db, `artifacts/${appId}/public/data/paint_shop_products`);
+            
+            onSnapshot(productCollectionRef, (querySnapshot) => {
+                productsData = [];
+                querySnapshot.forEach((doc) => {
+                    productsData.push({ id: doc.id, ...doc.data() });
+                });
+                renderProducts(currentSortKey);
+            }, (error) => {
+                console.error("Error listening to products:", error);
+                productList.innerHTML = `<p class="text-center text-red-500">Error loading products.</p>`;
+            });
+        }
+
+        // Render the products to the UI
+        function renderProducts(sortKey = 'name', order = 'asc') {
+            if (productsData.length === 0) {
+                productList.innerHTML = `<p class="text-center text-gray-500">No products found. Add one above!</p>`;
+                return;
+            }
+
+            // Filter data based on search input
+            const searchTerm = searchInput.value.toLowerCase();
+            const filteredData = productsData.filter(product => 
+                product.name.toLowerCase().includes(searchTerm)
+            );
+
+            // Sort filtered data on the client side
+            const sortedData = [...filteredData].sort((a, b) => {
+                const aValue = a[sortKey];
+                const bValue = b[sortKey];
+
+                if (aValue < bValue) return order === 'asc' ? -1 : 1;
+                if (aValue > bValue) return order === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            if (sortedData.length === 0) {
+                productList.innerHTML = `<p class="text-center text-gray-500">No products match your search.</p>`;
+                return;
+            }
+
+            productList.innerHTML = sortedData.map(product => `
+                <div class="bg-white rounded-lg shadow-sm p-4 border border-gray-200 flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0">
+                    <div class="flex-grow">
+                        <h3 class="font-bold text-lg text-gray-800">${product.name}</h3>
+                        <div class="mt-1 text-sm text-gray-600">
+                            <p><span class="font-semibold">Cost Price:</span> ₹${product.costPrice.toFixed(2)}</p>
+                            <p><span class="font-semibold">Selling Price:</span> ₹${product.sellingPrice.toFixed(2)}</p>
+                        </div>
+                    </div>
+                    <div class="flex space-x-2 mt-2 sm:mt-0">
+                        <button onclick="editProduct('${product.id}')" class="px-3 py-1 bg-yellow-500 hover:bg-yellow-600 text-white rounded-md text-sm font-medium transition duration-300 ease-in-out">Edit</button>
+                        <button onclick="deleteProduct('${product.id}')" class="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded-md text-sm font-medium transition duration-300 ease-in-out">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // Expose functions to the global scope for onclick attributes
+        window.editProduct = (productId) => {
+            const product = productsData.find(p => p.id === productId);
+            if (product) {
+                editingId = productId;
+                productNameInput.value = product.name;
+                costPriceInput.value = product.costPrice;
+                sellingPriceInput.value = product.sellingPrice;
+                formButton.textContent = "Update Product";
+                formButton.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                formButton.classList.add('bg-green-600', 'hover:bg-green-700');
+            }
+        };
+
+        window.deleteProduct = async (productId) => {
+            try {
+                const productDocRef = doc(db, `artifacts/${appId}/public/data/paint_shop_products`, productId);
+                await deleteDoc(productDocRef);
+            } catch (error) {
+                console.error("Error deleting document:", error);
+            }
+        };
+
+        // Handle form submission
+        productForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const productName = productNameInput.value;
+            const costPrice = parseFloat(costPriceInput.value);
+            const sellingPrice = parseFloat(sellingPriceInput.value);
+
+            if (isNaN(costPrice) || isNaN(sellingPrice)) {
+                console.error("Cost and Selling prices must be valid numbers.");
+                return;
+            }
+
+            const productData = {
+                name: productName,
+                costPrice: costPrice,
+                sellingPrice: sellingPrice
+            };
+
+            try {
+                if (editingId) {
+                    const productDocRef = doc(db, `artifacts/${appId}/public/data/paint_shop_products`, editingId);
+                    await updateDoc(productDocRef, productData);
+                    editingId = null;
+                    formButton.textContent = "Add Product";
+                    formButton.classList.remove('bg-green-600', 'hover:bg-green-700');
+                    formButton.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+                } else {
+                    const productCollectionRef = collection(db, `artifacts/${appId}/public/data/paint_shop_products`);
+                    await addDoc(productCollectionRef, productData);
+                }
+                productForm.reset();
+            } catch (error) {
+                console.error("Error saving document:", error);
+            }
+        });
+
+        // Add event listeners for sorting and search
+        sortByNameBtn.addEventListener('click', () => {
+            currentSortKey = 'name';
+            renderProducts(currentSortKey);
+        });
+        sortByCostBtn.addEventListener('click', () => {
+            currentSortKey = 'costPrice';
+            renderProducts(currentSortKey);
+        });
+        sortBySellingBtn.addEventListener('click', () => {
+            currentSortKey = 'sellingPrice';
+            renderProducts(currentSortKey);
+        });
+        
+        searchInput.addEventListener('input', () => {
+            renderProducts(currentSortKey);
+        });
+
+        // Register the service worker for PWA functionality
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js').then(registration => {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                }, err => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+
+        // Start the app when the window loads
+        window.onload = initializeAndAuth;
+    </script>
+</body>
+</html>
